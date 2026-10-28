@@ -1,190 +1,174 @@
 import os
-import sqlite3
-from functools import wraps
-from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, session, flash, g
+from datetime import date, datetime
+import pandas as pd
+import streamlit as st
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key-before-deployment")
-DATABASE = os.path.join(os.path.dirname(__file__), "notices.db")
+DATA_FILE = "notices.csv"
+ADMIN_PASSWORD = os.getenv("NOTICE_ADMIN_PASSWORD", "admin123")
+COLUMNS = ["ID", "Title", "Category", "Notice Date", "Description", "Posted On"]
 
-# Demo credentials for the experiential-learning project.
-# Change these before deploying the application publicly.
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+def load_notices():
+    if os.path.exists(DATA_FILE):
+        try:
+            df = pd.read_csv(DATA_FILE, dtype={"ID": str})
+            for col in COLUMNS:
+                if col not in df.columns:
+                    df[col] = ""
+            return df[COLUMNS].fillna("")
+        except Exception:
+            pass
+    return pd.DataFrame(columns=COLUMNS)
 
+def save_notices(df):
+    df[COLUMNS].to_csv(DATA_FILE, index=False)
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("""
-            CREATE TABLE IF NOT EXISTS notices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                category TEXT NOT NULL,
-                notice_date TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        g.db.commit()
-    return g.db
+st.set_page_config(page_title="Digital Notice Board", page_icon="📌", layout="wide")
+st.markdown("""
+<style>
+.main {background-color: #f7f9fc;}
+.block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+.hero {padding: 1.2rem 1.5rem; border-radius: 16px; color: white;
+       background: linear-gradient(120deg,#163a70,#2676b8); margin-bottom: 1rem;}
+.notice-card {padding: 1rem; border: 1px solid #dfe6ef; border-radius: 12px;
+              background: white; margin-bottom: .75rem;}
+.small-muted {color: #637083; font-size: .9rem;}
+</style>
+""", unsafe_allow_html=True)
 
+if "admin_logged_in" not in st.session_state:
+    st.session_state.admin_logged_in = False
 
-@app.teardown_appcontext
-def close_db(exception=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
+notices = load_notices()
+st.markdown('<div class="hero"><h1>📌 Digital Notice Board System</h1><p>One place for campus updates, events and important announcements.</p></div>', unsafe_allow_html=True)
 
+menu = st.sidebar.radio("Navigation", ["Home / View Notices", "Administrator"])
+st.sidebar.caption("Digital Notice Board • Python + Streamlit")
 
-def admin_required(view):
-    @wraps(view)
-    def wrapped_view(*args, **kwargs):
-        if not session.get("is_admin"):
-            flash("Please sign in as an administrator first.", "warning")
-            return redirect(url_for("admin_login"))
-        return view(*args, **kwargs)
-    return wrapped_view
-
-
-@app.route("/")
-def index():
-    db = get_db()
-    category = request.args.get("category", "").strip()
-    sort = request.args.get("sort", "newest")
-    search = request.args.get("q", "").strip()
-
-    query = "SELECT * FROM notices WHERE 1=1"
-    params = []
-    if category:
-        query += " AND category = ?"
-        params.append(category)
+if menu == "Home / View Notices":
+    st.subheader("Latest Notices")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    search = c1.text_input("Search notices", placeholder="Search title or description...")
+    cats = ["All"] + sorted([x for x in notices["Category"].astype(str).unique() if x])
+    category = c2.selectbox("Category", cats)
+    sort_order = c3.selectbox("Sort by", ["Newest first", "Oldest first", "Category"])
+    view = notices.copy()
     if search:
-        query += " AND (title LIKE ? OR content LIKE ?)"
-        params.extend([f"%{search}%", f"%{search}%"])
-
-    if sort == "oldest":
-        query += " ORDER BY notice_date ASC, id ASC"
-    elif sort == "title":
-        query += " ORDER BY title COLLATE NOCASE ASC"
+        mask = view["Title"].astype(str).str.contains(search, case=False, na=False) | view["Description"].astype(str).str.contains(search, case=False, na=False)
+        view = view[mask]
+    if category != "All":
+        view = view[view["Category"] == category]
+    if not view.empty:
+        view["_date"] = pd.to_datetime(view["Notice Date"], errors="coerce")
+        if sort_order == "Newest first":
+            view = view.sort_values("_date", ascending=False, na_position="last")
+        elif sort_order == "Oldest first":
+            view = view.sort_values("_date", ascending=True, na_position="last")
+        else:
+            view = view.sort_values(["Category", "_date"], ascending=[True, False], na_position="last")
+        st.caption(f"{len(view)} notice(s) found")
+        for _, row in view.iterrows():
+            st.markdown(f"""
+            <div class="notice-card">
+              <h3>{row['Title']}</h3>
+              <p><b>Category:</b> {row['Category']} &nbsp; | &nbsp; <b>Notice date:</b> {row['Notice Date']}</p>
+              <p>{row['Description']}</p>
+              <p class="small-muted">Posted on: {row['Posted On']}</p>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        query += " ORDER BY notice_date DESC, id DESC"
+        st.info("No notices found. The administrator can add notices from the Administrator page.")
+    st.download_button("Download visible notices (CSV)", view[COLUMNS].to_csv(index=False).encode("utf-8"),
+                       file_name="visible_notices.csv", mime="text/csv", disabled=view.empty)
 
-    notices = db.execute(query, params).fetchall()
-    categories = db.execute(
-        "SELECT DISTINCT category FROM notices ORDER BY category COLLATE NOCASE"
-    ).fetchall()
-    return render_template(
-        "index.html", notices=notices, categories=categories,
-        selected_category=category, sort=sort, search=search
-    )
-
-
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    if request.method == "POST":
-        username = request.form.get("username", "")
-        password = request.form.get("password", "")
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-            session.clear()
-            session["is_admin"] = True
-            flash("Welcome back! You are signed in.", "success")
-            return redirect(url_for("admin_dashboard"))
-        flash("Incorrect username or password.", "danger")
-    return render_template("login.html")
-
-
-@app.route("/admin/logout", methods=["POST"])
-def admin_logout():
-    session.clear()
-    flash("You have been signed out.", "info")
-    return redirect(url_for("index"))
-
-
-@app.route("/admin")
-@admin_required
-def admin_dashboard():
-    notices = get_db().execute(
-        "SELECT * FROM notices ORDER BY created_at DESC, id DESC"
-    ).fetchall()
-    return render_template("admin.html", notices=notices)
-
-
-def validate_notice(form):
-    title = form.get("title", "").strip()
-    content = form.get("content", "").strip()
-    category = form.get("category", "").strip()
-    notice_date = form.get("notice_date", "").strip()
-    if not all([title, content, category, notice_date]):
-        return None, "Please complete every field."
-    try:
-        datetime.strptime(notice_date, "%Y-%m-%d")
-    except ValueError:
-        return None, "Please enter a valid notice date."
-    if len(title) > 120:
-        return None, "Title must be 120 characters or fewer."
-    if len(category) > 50:
-        return None, "Category must be 50 characters or fewer."
-    return {
-        "title": title, "content": content,
-        "category": category, "notice_date": notice_date
-    }, None
-
-
-@app.route("/admin/notices/new", methods=["GET", "POST"])
-@admin_required
-def create_notice():
-    if request.method == "POST":
-        data, error = validate_notice(request.form)
-        if error:
-            flash(error, "danger")
-        else:
-            db = get_db()
-            db.execute(
-                "INSERT INTO notices (title, content, category, notice_date, created_at) VALUES (?, ?, ?, ?, ?)",
-                (data["title"], data["content"], data["category"],
-                 data["notice_date"], datetime.now().isoformat(timespec="seconds"))
-            )
-            db.commit()
-            flash("Notice published successfully.", "success")
-            return redirect(url_for("admin_dashboard"))
-    return render_template("notice_form.html", notice=None, page_title="Publish a notice")
-
-
-@app.route("/admin/notices/<int:notice_id>/edit", methods=["GET", "POST"])
-@admin_required
-def edit_notice(notice_id):
-    db = get_db()
-    notice = db.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()
-    if notice is None:
-        flash("That notice could not be found.", "danger")
-        return redirect(url_for("admin_dashboard"))
-    if request.method == "POST":
-        data, error = validate_notice(request.form)
-        if error:
-            flash(error, "danger")
-        else:
-            db.execute(
-                "UPDATE notices SET title=?, content=?, category=?, notice_date=? WHERE id=?",
-                (data["title"], data["content"], data["category"], data["notice_date"], notice_id)
-            )
-            db.commit()
-            flash("Notice updated successfully.", "success")
-            return redirect(url_for("admin_dashboard"))
-    return render_template("notice_form.html", notice=notice, page_title="Update notice")
-
-
-@app.route("/admin/notices/<int:notice_id>/delete", methods=["POST"])
-@admin_required
-def delete_notice(notice_id):
-    db = get_db()
-    db.execute("DELETE FROM notices WHERE id = ?", (notice_id,))
-    db.commit()
-    flash("Notice deleted.", "info")
-    return redirect(url_for("admin_dashboard"))
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
+else:
+    st.subheader("Administrator Panel")
+    if not st.session_state.admin_logged_in:
+        st.write("Sign in to manage notices.")
+        with st.form("admin_login"):
+            password = st.text_input("Administrator password", type="password")
+            submitted = st.form_submit_button("Login")
+        if submitted:
+            if password == ADMIN_PASSWORD:
+                st.session_state.admin_logged_in = True
+                st.success("Login successful.")
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        st.caption("Demo password for local testing: admin123. Set NOTICE_ADMIN_PASSWORD before deployment.")
+    else:
+        if st.button("Logout"):
+            st.session_state.admin_logged_in = False
+            st.rerun()
+        tab_add, tab_edit, tab_delete, tab_all = st.tabs(["Add Notice", "Update Notice", "Delete Notice", "All Notices"])
+        with tab_add:
+            with st.form("add_notice", clear_on_submit=True):
+                title = st.text_input("Notice title")
+                category = st.selectbox("Category", ["General", "Academic", "Examination", "Events", "Placement", "Holiday", "Sports", "Urgent"])
+                notice_date = st.date_input("Notice date", value=date.today())
+                description = st.text_area("Notice description")
+                add = st.form_submit_button("Publish Notice")
+            if add:
+                if not title.strip() or not description.strip():
+                    st.error("Please enter both a title and description.")
+                else:
+                    current = load_notices()
+                    next_id = str(max([int(x) for x in current["ID"] if str(x).isdigit()] + [0]) + 1)
+                    new = pd.DataFrame([{"ID": next_id, "Title": title.strip(), "Category": category,
+                                         "Notice Date": str(notice_date), "Description": description.strip(),
+                                         "Posted On": str(date.today())}])
+                    save_notices(pd.concat([current, new], ignore_index=True))
+                    st.success("Notice published successfully.")
+                    st.rerun()
+        with tab_edit:
+            current = load_notices()
+            if current.empty:
+                st.info("There are no notices to update.")
+            else:
+                ids = current["ID"].astype(str).tolist()
+                selected_id = st.selectbox("Select notice ID", ids, key="edit_id")
+                row = current[current["ID"].astype(str) == selected_id].iloc[0]
+                with st.form("edit_notice"):
+                    new_title = st.text_input("Title", value=str(row["Title"]))
+                    categories = ["General", "Academic", "Examination", "Events", "Placement", "Holiday", "Sports", "Urgent"]
+                    old_cat = str(row["Category"])
+                    cat_index = categories.index(old_cat) if old_cat in categories else 0
+                    new_category = st.selectbox("Category", categories, index=cat_index)
+                    try:
+                        old_date = date.fromisoformat(str(row["Notice Date"]))
+                    except Exception:
+                        old_date = date.today()
+                    new_date = st.date_input("Notice date", value=old_date)
+                    new_description = st.text_area("Description", value=str(row["Description"]))
+                    update = st.form_submit_button("Save Changes")
+                if update:
+                    if not new_title.strip() or not new_description.strip():
+                        st.error("Title and description cannot be empty.")
+                    else:
+                        current.loc[current["ID"].astype(str) == selected_id, COLUMNS[1:5]] = [
+                            new_title.strip(), new_category, str(new_date), new_description.strip()]
+                        save_notices(current)
+                        st.success("Notice updated successfully.")
+                        st.rerun()
+        with tab_delete:
+            current = load_notices()
+            if current.empty:
+                st.info("There are no notices to delete.")
+            else:
+                options = {f"{r['ID']} — {r['Title']}": str(r["ID"]) for _, r in current.iterrows()}
+                label = st.selectbox("Select notice to delete", list(options.keys()))
+                confirm = st.checkbox("I confirm that I want to delete this notice.")
+                if st.button("Delete Selected Notice", type="primary"):
+                    if confirm:
+                        save_notices(current[current["ID"].astype(str) != options[label]])
+                        st.success("Notice deleted.")
+                        st.rerun()
+                    else:
+                        st.warning("Please confirm before deleting.")
+        with tab_all:
+            current = load_notices()
+            if current.empty:
+                st.info("No notices have been published yet.")
+            else:
+                st.dataframe(current, use_container_width=True, hide_index=True)
+                st.download_button("Download all notices (CSV)", current.to_csv(index=False).encode("utf-8"),
+                                   file_name="notices.csv", mime="text/csv")
