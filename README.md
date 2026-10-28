@@ -1,70 +1,59 @@
-# NoticeHub — Digital Notice Board System
+﻿# Digital Notice Board System
 
-A responsive Python web application built with Flask and SQLite for an experiential learning project.
+A Python and Streamlit web application for managing college notices.
 
 ## Features
-- Public notice board for all users
 - Administrator login
-- Create, update, and delete notices
-- Filter notices by category
-- Sort notices by newest, oldest, or title
-- Search notice titles and content
-- Responsive layout for desktop and mobile
-- SQLite database created automatically
+- Add, edit and delete notices
+- Search notices by title and description
+- Filter by category
+- Sort by publication date
+- Optional expiry dates
+- SQLite database
 
 ## Requirements
-- Python 3.9 or newer
+- Python 3.10 or later
 - pip
 
-## Run the application
+## Run on Windows
 
-1. Extract the project ZIP and open a terminal in the `digital_notice_board` folder.
-2. (Optional but recommended) Create and activate a virtual environment:
+Open PowerShell in this folder and run:
 
-   Windows:
-   ```powershell
-   python -m venv .venv
-   .venv\Scripts\activate
-   ```
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m streamlit run app.py
+```
 
-   macOS/Linux:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
+Open the local URL shown in the terminal.
 
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Demo administrator account
 
-4. Start the web app:
-   ```bash
-   python app.py
-   ```
-
-5. Open `http://127.0.0.1:5000` in your browser.
-
-## Demo administrator login
 - Username: `admin`
 - Password: `admin123`
 
-Select **Admin login** in the navigation bar to sign in. After logging in, use **Manage notices** to publish, edit, or delete notices.
+This default account is for local testing only. Change credentials before deployment.
 
-## Important security note
-The default login and secret key are intended for a local classroom demonstration only. Before deploying publicly, set environment variables `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` to strong values. For a production application, add CSRF protection, rate limiting, and a proper password-hashing/user-management system. Do not use Flask's debug server for public deployment.
+You can set environment variables in PowerShell before launching the app:
 
-## Suggested project description
-**Problem statement:** Traditional paper notice boards can be difficult to update and may not be seen by every student. This system provides a central digital platform where an administrator can manage notices and users can search, sort, and filter announcements.
+```powershell
+$env:ADMIN_USERNAME = "your-admin"
+$env:ADMIN_PASSWORD = "your-strong-password"
+```
 
-**Objectives:**
-1. Develop a web-based notice board using Python.
-2. Provide administrator authentication.
-3. Implement create, read, update, and delete (CRUD) operations.
-4. Store notices in an SQLite database.
-5. Let users search notices and sort them by date or category.
-6. Build a responsive, easy-to-use interface.
+## Database
 
-**Technology stack:** Python, Flask, SQLite, HTML, CSS, Jinja templates.
+SQLite creates `notices.db` automatically when the app starts. Back up this file to preserve notices.
 
-**Experiential learning outcomes:** Practical experience with routing, form handling, database operations, session-based login, input validation, templating, and responsive web design.
+For cloud deployment, use secure credentials and a persistent managed database.
+
+## Project structure
+
+- `app.py` — main Streamlit application
+- `requirements.txt` — Python dependencies
+- `README.md` — documentation
+- `.gitignore` — excluded files
+
+## Author
+
+Add your name here.

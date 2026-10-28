@@ -1,174 +1,258 @@
-import os
+﻿import os
+import sqlite3
+import hmac
 from datetime import date, datetime
-import pandas as pd
+
 import streamlit as st
 
-DATA_FILE = "notices.csv"
-ADMIN_PASSWORD = os.getenv("NOTICE_ADMIN_PASSWORD", "admin123")
-COLUMNS = ["ID", "Title", "Category", "Notice Date", "Description", "Posted On"]
+st.set_page_config(
+    page_title="Digital Notice Board",
+    page_icon="📢",
+    layout="wide"
+)
 
-def load_notices():
-    if os.path.exists(DATA_FILE):
-        try:
-            df = pd.read_csv(DATA_FILE, dtype={"ID": str})
-            for col in COLUMNS:
-                if col not in df.columns:
-                    df[col] = ""
-            return df[COLUMNS].fillna("")
-        except Exception:
-            pass
-    return pd.DataFrame(columns=COLUMNS)
+DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notices.db")
+CATEGORIES = ["Academic", "Examination", "Events", "Placements", "Holidays", "General"]
 
-def save_notices(df):
-    df[COLUMNS].to_csv(DATA_FILE, index=False)
+# Demo credentials. Configure environment variables before deployment.
+ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "admin123")
 
-st.set_page_config(page_title="Digital Notice Board", page_icon="📌", layout="wide")
-st.markdown("""
-<style>
-.main {background-color: #f7f9fc;}
-.block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
-.hero {padding: 1.2rem 1.5rem; border-radius: 16px; color: white;
-       background: linear-gradient(120deg,#163a70,#2676b8); margin-bottom: 1rem;}
-.notice-card {padding: 1rem; border: 1px solid #dfe6ef; border-radius: 12px;
-              background: white; margin-bottom: .75rem;}
-.small-muted {color: #637083; font-size: .9rem;}
-</style>
-""", unsafe_allow_html=True)
 
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
+def connect():
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
+    return con
 
-notices = load_notices()
-st.markdown('<div class="hero"><h1>📌 Digital Notice Board System</h1><p>One place for campus updates, events and important announcements.</p></div>', unsafe_allow_html=True)
 
-menu = st.sidebar.radio("Navigation", ["Home / View Notices", "Administrator"])
-st.sidebar.caption("Digital Notice Board • Python + Streamlit")
+def initialize():
+    with connect() as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS notices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                publish_date TEXT NOT NULL,
+                expiry_date TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
 
-if menu == "Home / View Notices":
-    st.subheader("Latest Notices")
-    c1, c2, c3 = st.columns([2, 1, 1])
-    search = c1.text_input("Search notices", placeholder="Search title or description...")
-    cats = ["All"] + sorted([x for x in notices["Category"].astype(str).unique() if x])
-    category = c2.selectbox("Category", cats)
-    sort_order = c3.selectbox("Sort by", ["Newest first", "Oldest first", "Category"])
-    view = notices.copy()
-    if search:
-        mask = view["Title"].astype(str).str.contains(search, case=False, na=False) | view["Description"].astype(str).str.contains(search, case=False, na=False)
-        view = view[mask]
-    if category != "All":
-        view = view[view["Category"] == category]
-    if not view.empty:
-        view["_date"] = pd.to_datetime(view["Notice Date"], errors="coerce")
-        if sort_order == "Newest first":
-            view = view.sort_values("_date", ascending=False, na_position="last")
-        elif sort_order == "Oldest first":
-            view = view.sort_values("_date", ascending=True, na_position="last")
+
+def all_notices():
+    with connect() as con:
+        return con.execute(
+            "SELECT * FROM notices ORDER BY publish_date DESC, id DESC"
+        ).fetchall()
+
+
+def save_notice(title, description, category, pub, expiry, notice_id=None):
+    values = (
+        title.strip(), description.strip(), category, pub.isoformat(),
+        expiry.isoformat() if expiry else None
+    )
+    with connect() as con:
+        if notice_id is None:
+            con.execute("""
+                INSERT INTO notices
+                (title, description, category, publish_date, expiry_date, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, values + (datetime.now().isoformat(timespec="seconds"),))
         else:
-            view = view.sort_values(["Category", "_date"], ascending=[True, False], na_position="last")
-        st.caption(f"{len(view)} notice(s) found")
-        for _, row in view.iterrows():
-            st.markdown(f"""
-            <div class="notice-card">
-              <h3>{row['Title']}</h3>
-              <p><b>Category:</b> {row['Category']} &nbsp; | &nbsp; <b>Notice date:</b> {row['Notice Date']}</p>
-              <p>{row['Description']}</p>
-              <p class="small-muted">Posted on: {row['Posted On']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.info("No notices found. The administrator can add notices from the Administrator page.")
-    st.download_button("Download visible notices (CSV)", view[COLUMNS].to_csv(index=False).encode("utf-8"),
-                       file_name="visible_notices.csv", mime="text/csv", disabled=view.empty)
+            con.execute("""
+                UPDATE notices
+                SET title=?, description=?, category=?, publish_date=?, expiry_date=?
+                WHERE id=?
+            """, values + (notice_id,))
 
-else:
-    st.subheader("Administrator Panel")
-    if not st.session_state.admin_logged_in:
-        st.write("Sign in to manage notices.")
-        with st.form("admin_login"):
-            password = st.text_input("Administrator password", type="password")
-            submitted = st.form_submit_button("Login")
-        if submitted:
-            if password == ADMIN_PASSWORD:
-                st.session_state.admin_logged_in = True
-                st.success("Login successful.")
+
+def main():
+    initialize()
+
+    st.markdown("""
+    <style>
+    .block-container {padding-top: 2rem;}
+    h1 {color: #2457A7;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.title("📢 Digital Notice Board")
+    st.caption("A centralized platform for important college announcements.")
+
+    with st.sidebar:
+        st.title("Navigation")
+        page = st.radio("Choose a page", ["Home", "Admin Login", "Manage Notices"])
+        st.divider()
+        st.caption("Python • Streamlit • SQLite")
+
+    if "admin" not in st.session_state:
+        st.session_state.admin = False
+
+    if page == "Home":
+        notices = all_notices()
+        today = date.today().isoformat()
+        active = [
+            n for n in notices
+            if n["publish_date"] <= today
+            and (not n["expiry_date"] or n["expiry_date"] >= today)
+        ]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Active Notices", len(active))
+        c2.metric("Categories", len(set(n["category"] for n in active)))
+        c3.metric("Published Today", sum(n["publish_date"] == today for n in active))
+
+        st.subheader("Search and Filter")
+        search = st.text_input("Search title or description")
+        a, b = st.columns(2)
+        with a:
+            category = st.selectbox("Category", ["All"] + CATEGORIES)
+        with b:
+            order = st.selectbox("Sort by date", ["Newest First", "Oldest First"])
+
+        results = active
+        if search.strip():
+            q = search.casefold().strip()
+            results = [
+                n for n in results
+                if q in n["title"].casefold() or q in n["description"].casefold()
+            ]
+        if category != "All":
+            results = [n for n in results if n["category"] == category]
+
+        results = sorted(
+            results,
+            key=lambda n: (n["publish_date"], n["id"]),
+            reverse=(order == "Newest First")
+        )
+
+        st.subheader("Published Notices")
+        st.caption(f"{len(results)} notice(s) found")
+        if not results:
+            st.info("No notices found. Try changing the search or category.")
+        for n in results:
+            with st.container(border=True):
+                st.subheader("📌 " + n["title"])
+                st.caption(f"{n['category']}  •  Published: {n['publish_date']}")
+                st.write(n["description"])
+                if n["expiry_date"]:
+                    st.caption("Valid until: " + n["expiry_date"])
+
+    elif page == "Admin Login":
+        if st.session_state.admin:
+            st.success("Administrator is logged in.")
+            if st.button("Log out"):
+                st.session_state.admin = False
                 st.rerun()
-            else:
-                st.error("Incorrect password.")
-        st.caption("Demo password for local testing: admin123. Set NOTICE_ADMIN_PASSWORD before deployment.")
-    else:
-        if st.button("Logout"):
-            st.session_state.admin_logged_in = False
-            st.rerun()
-        tab_add, tab_edit, tab_delete, tab_all = st.tabs(["Add Notice", "Update Notice", "Delete Notice", "All Notices"])
-        with tab_add:
-            with st.form("add_notice", clear_on_submit=True):
-                title = st.text_input("Notice title")
-                category = st.selectbox("Category", ["General", "Academic", "Examination", "Events", "Placement", "Holiday", "Sports", "Urgent"])
-                notice_date = st.date_input("Notice date", value=date.today())
-                description = st.text_area("Notice description")
-                add = st.form_submit_button("Publish Notice")
-            if add:
-                if not title.strip() or not description.strip():
-                    st.error("Please enter both a title and description.")
+        else:
+            st.subheader("Administrator Login")
+            with st.form("login"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
+                submit = st.form_submit_button("Login")
+            if submit:
+                valid = (
+                    hmac.compare_digest(username, ADMIN_USER)
+                    and hmac.compare_digest(password, ADMIN_PASS)
+                )
+                if valid:
+                    st.session_state.admin = True
+                    st.rerun()
                 else:
-                    current = load_notices()
-                    next_id = str(max([int(x) for x in current["ID"] if str(x).isdigit()] + [0]) + 1)
-                    new = pd.DataFrame([{"ID": next_id, "Title": title.strip(), "Category": category,
-                                         "Notice Date": str(notice_date), "Description": description.strip(),
-                                         "Posted On": str(date.today())}])
-                    save_notices(pd.concat([current, new], ignore_index=True))
+                    st.error("Incorrect username or password.")
+
+    elif page == "Manage Notices":
+        if not st.session_state.admin:
+            st.warning("Please log in from the Admin Login page first.")
+            st.stop()
+
+        notices = all_notices()
+        add_tab, edit_tab, delete_tab = st.tabs(
+            ["Add Notice", "Edit Notice", "Delete Notice"]
+        )
+
+        with add_tab:
+            with st.form("add_form", clear_on_submit=True):
+                title = st.text_input("Title")
+                description = st.text_area("Description")
+                category = st.selectbox("Category", CATEGORIES)
+                pub = st.date_input("Publish date", value=date.today())
+                has_expiry = st.checkbox("Set expiry date")
+                expiry = st.date_input("Expiry date", value=date.today()) if has_expiry else None
+                submit = st.form_submit_button("Publish Notice")
+
+            if submit:
+                if not title.strip() or not description.strip():
+                    st.error("Title and description are required.")
+                elif expiry and expiry < pub:
+                    st.error("Expiry date cannot be before publish date.")
+                else:
+                    save_notice(title, description, category, pub, expiry)
                     st.success("Notice published successfully.")
                     st.rerun()
-        with tab_edit:
-            current = load_notices()
-            if current.empty:
-                st.info("There are no notices to update.")
+
+        with edit_tab:
+            if not notices:
+                st.info("There are no notices to edit.")
             else:
-                ids = current["ID"].astype(str).tolist()
-                selected_id = st.selectbox("Select notice ID", ids, key="edit_id")
-                row = current[current["ID"].astype(str) == selected_id].iloc[0]
-                with st.form("edit_notice"):
-                    new_title = st.text_input("Title", value=str(row["Title"]))
-                    categories = ["General", "Academic", "Examination", "Events", "Placement", "Holiday", "Sports", "Urgent"]
-                    old_cat = str(row["Category"])
-                    cat_index = categories.index(old_cat) if old_cat in categories else 0
-                    new_category = st.selectbox("Category", categories, index=cat_index)
-                    try:
-                        old_date = date.fromisoformat(str(row["Notice Date"]))
-                    except Exception:
-                        old_date = date.today()
-                    new_date = st.date_input("Notice date", value=old_date)
-                    new_description = st.text_area("Description", value=str(row["Description"]))
-                    update = st.form_submit_button("Save Changes")
-                if update:
-                    if not new_title.strip() or not new_description.strip():
-                        st.error("Title and description cannot be empty.")
+                choices = {f"#{n['id']} - {n['title']}": n for n in notices}
+                label = st.selectbox("Select notice", list(choices), key="edit_choice")
+                selected = choices[label]
+                with st.form("edit_form"):
+                    title = st.text_input("Title", value=selected["title"])
+                    description = st.text_area("Description", value=selected["description"])
+                    category = st.selectbox(
+                        "Category", CATEGORIES,
+                        index=CATEGORIES.index(selected["category"])
+                    )
+                    pub = st.date_input(
+                        "Publish date",
+                        value=date.fromisoformat(selected["publish_date"])
+                    )
+                    has_expiry = st.checkbox(
+                        "Set expiry date", value=bool(selected["expiry_date"])
+                    )
+                    expiry = st.date_input(
+                        "Expiry date",
+                        value=date.fromisoformat(selected["expiry_date"])
+                        if selected["expiry_date"] else date.today()
+                    ) if has_expiry else None
+                    submit = st.form_submit_button("Save Changes")
+
+                if submit:
+                    if not title.strip() or not description.strip():
+                        st.error("Title and description are required.")
+                    elif expiry and expiry < pub:
+                        st.error("Expiry date cannot be before publish date.")
                     else:
-                        current.loc[current["ID"].astype(str) == selected_id, COLUMNS[1:5]] = [
-                            new_title.strip(), new_category, str(new_date), new_description.strip()]
-                        save_notices(current)
-                        st.success("Notice updated successfully.")
+                        save_notice(
+                            title, description, category, pub, expiry, selected["id"]
+                        )
+                        st.success("Notice updated.")
                         st.rerun()
-        with tab_delete:
-            current = load_notices()
-            if current.empty:
+
+        with delete_tab:
+            if not notices:
                 st.info("There are no notices to delete.")
             else:
-                options = {f"{r['ID']} — {r['Title']}": str(r["ID"]) for _, r in current.iterrows()}
-                label = st.selectbox("Select notice to delete", list(options.keys()))
-                confirm = st.checkbox("I confirm that I want to delete this notice.")
-                if st.button("Delete Selected Notice", type="primary"):
+                choices = {f"#{n['id']} - {n['title']}": n for n in notices}
+                label = st.selectbox("Select notice", list(choices), key="delete_choice")
+                selected = choices[label]
+                st.warning("Selected notice: " + selected["title"])
+                confirm = st.checkbox("I confirm deletion.")
+                if st.button("Delete Notice", type="primary"):
                     if confirm:
-                        save_notices(current[current["ID"].astype(str) != options[label]])
+                        with connect() as con:
+                            con.execute("DELETE FROM notices WHERE id=?", (selected["id"],))
                         st.success("Notice deleted.")
                         st.rerun()
                     else:
-                        st.warning("Please confirm before deleting.")
-        with tab_all:
-            current = load_notices()
-            if current.empty:
-                st.info("No notices have been published yet.")
-            else:
-                st.dataframe(current, use_container_width=True, hide_index=True)
-                st.download_button("Download all notices (CSV)", current.to_csv(index=False).encode("utf-8"),
-                                   file_name="notices.csv", mime="text/csv")
+                        st.error("Confirm deletion first.")
+
+    st.divider()
+    st.caption("Digital Notice Board System | Academic Project")
+
+
+if __name__ == "__main__":
+    main()
